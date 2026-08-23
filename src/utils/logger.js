@@ -5,7 +5,10 @@ const logger = {
     console.log(pc.blue('ℹ ') + message);
   },
   success: (message) => {
-    console.log(pc.green('✔ ') + pc.bold(message));
+    console.log(pc.green('✔ ') + pc.green(pc.bold(message)));
+  },
+  gated: (message) => {
+    console.log(pc.yellow('🔏 [GATED] ') + pc.yellow(message));
   },
   warn: (message) => {
     console.warn(pc.yellow('⚠ ') + pc.yellow(message));
