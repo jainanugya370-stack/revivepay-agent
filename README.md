@@ -1,91 +1,71 @@
-# Automated Outreach Pipeline CLI
+# RevivePay — Merchant Revenue Recovery & Growth Agent
 
-A highly modular, resilient, 4-stage Command Line Interface (CLI) outreach tool built in Node.js. Given a single "seed" company domain, the pipeline automatically discovers lookalike companies, targets C-suite/VP-level decision-makers, resolves verified professional emails, and sends personalized cold outreach emails using a safety-controlled approval mechanism.
+RevivePay is an autonomous agent designed for the **Razorpay AI Buildathon (Track 01: AI Growth & Agentic Commerce)**. It plugs into a merchant's Razorpay account (test-mode) to continuously scan customers, orders, and subscriptions, identifying lost revenue opportunities. 
+
+For every opportunity it finds, the agent personalizes recovery offers (discount coupons, checkout link nudges, billing alerts), validates them against strict safety bounding gates (discount caps, batch budget limits, contact frequency cool-downs), generates secure payment links, and executes campaigns via Brevo email delivery.
 
 ---
 
 ## 🚀 Architecture & Pipeline Flow
 
-The tool operates in four distinct workflow scenarios based on the command-line flags you pass:
-
-### 1. Scenario A: Safety Mode (`--safety` flag only)
-Slices through Stages 1–3 on real prospects, renders the Safety Checkpoint table, and pauses for a **Y/N** input. Emails are sent only upon explicit user confirmation (`Y`).
+The agent runs a structured 4-stage pipeline: **Detect &rarr; Enrich &rarr; Personalize/Gate &rarr; Execute**.
 
 ```mermaid
-graph LR
-    Input[Seed Domain] --> Stage1[Stage 1: Apollo Lookalikes]
-    Stage1 -->|Similar Domains| Stage2[Stage 2: Prospeo Decision Makers]
-    Stage2 -->|LinkedIn URLs| Stage3[Stage 3: Email Resolution]
-    Stage3 -->|Verified Emails| Checkpoint{Y/N Checkpoint Prompt}
-    Checkpoint -->|Y: Approve| Stage4[Stage 4: Brevo SMTP Outreach]
-    Checkpoint -->|N: Reject| End[Halted safely]
+graph TD
+    subgraph Stage 1: Detect
+        RZP[Razorpay Test API] -->|Scan Orders & Subscriptions| S1{Signal Detector}
+        S1 -->|Inactivity| S_OTB[One-Time Buyers]
+        S1 -->|Created Unpaid| S_AC[Abandoned Checkouts]
+        S1 -->|Billing Failed| S_FS[Failed Subscriptions]
+        S1 -->|Renewing soon| S_RN[Nearing Renewal]
+    end
+
+    subgraph Stage 2: Enrich
+        S_OTB & S_AC & S_FS & S_RN --> Enricher[Context Enrichment]
+        Enricher -->|Calculate| LTV[Lifetime Value]
+        Enricher -->|Calculate| AOV[Average Order Value]
+        Enricher -->|Verify| Hist[Outreach Cooldown Check]
+    end
+
+    subgraph Stage 3: Personalize & Bounding
+        Enricher --> RuleEngine[Deterministic Decisions]
+        RuleEngine --> Gate_Disc{Discount Cap <20%?}
+        RuleEngine --> Gate_Freq{Contact gap >7 days?}
+        RuleEngine --> Gate_Spend{Batch Budget <INR 300?}
+        
+        Gate_Disc & Gate_Freq & Gate_Spend -->|Passed| APPROVED[APPROVED Decisions]
+        Gate_Disc & Gate_Freq & Gate_Spend -->|Violated| GATED[GATED & Logged Decisions]
+    end
+
+    subgraph Stage 4: Execute
+        APPROVED --> RZP_PL[Generate Razorpay Payment Links]
+        RZP_PL --> Brevo[Brevo SMTP Email Delivery]
+        GATED --> Audit_Log[(Persistent Audit Log)]
+        Brevo -->|Success/Failed| Audit_Log
+    end
 ```
-* **Command:** `node index.js stripe.com --safety`
 
 ---
 
-### 2. Scenario B: Demo Mode (`--demo` flag only)
-Runs Stages 1–3 on real prospects, but overrides the final target list with test emails `project.samarops@gmail.com` and `samar@casmed.in` to allow safe sandbox dry-runs. Bypasses the safety checkpoint prompts and sends immediately.
+## 🔒 Bounding Gates & Safety Checks (The Judging Bar)
 
-```mermaid
-graph LR
-    Input[Seed Domain] --> Stage1[Stage 1: Apollo Lookalikes]
-    Stage1 --> Stage2[Stage 2: Prospeo Decision Makers]
-    Stage2 --> Stage3[Stage 3: Email Resolution]
-    Stage3 --> DemoOverride[Demo Override: Test Emails only]
-    DemoOverride --> Stage4[Stage 4: Brevo SMTP Outreach]
-```
-* **Command:** `node index.js stripe.com --demo`
+To ensure high corporate compliance and safety, every money-touching decision is validated against rigid thresholds defined in `src/config.js` before executing:
 
----
-
-### 3. Scenario C: Full Execution / Default (No flags)
-Designed for fully automated, headless growth loops. Runs Stages 1–3 on real contacts and immediately fires outreach emails to them without pause or checkpoint confirmation.
-
-```mermaid
-graph LR
-    Input[Seed Domain] --> Stage1[Stage 1: Apollo Lookalikes]
-    Stage1 -->|Similar Domains| Stage2[Stage 2: Prospeo Decision Makers]
-    Stage2 -->|LinkedIn URLs| Stage3[Stage 3: Email Resolution]
-    Stage3 -->|Verified Emails| Stage4[Stage 4: Brevo SMTP Outreach]
-```
-* **Command:** `node index.js stripe.com`
-
----
-
-### 4. Scenario D: Mail-Only Mock Run (`--stage mail` and `--demo` flags)
-Skips Stages 1–3 entirely and jumps directly to Stage 4 (Outreach) with the mock test emails (`project.samarops@gmail.com` and `samar@casmed.in`). No seed domain argument is required. Supplying optional `--safety` prompts the user for Y/N confirmation before dispatching.
-
-```mermaid
-graph LR
-    Start[Start: Mail-Only Stage] --> DemoOverride[Demo Override: Test Emails only]
-    DemoOverride --> SafetyCheck{--safety passed?}
-    SafetyCheck -->|Yes| Checkpoint[Y/N Checkpoint Prompt] -->|Y: Approve| Stage4[Stage 4: Brevo SMTP Outreach]
-    SafetyCheck -->|No| Stage4[Stage 4: Brevo SMTP Outreach]
-```
-* **Command:** `node index.js --stage mail --demo --safety`
-
----
-
-### 🔍 Stage-by-Stage Details
-
-1. **Stage 1: Lookalike Sourcing (`src/api/lookalikes.js`):** Enriches the seed domain using Apollo's `GET /api/v1/organizations/enrich` to find firmographics, then searches similar companies via `POST /api/v1/organizations/search`.
-2. **Stage 2: Finding Decision Makers (`src/api/prospeo.js`):** Queries Prospeo `POST /search-person` for contacts at lookalike domains with seniorities of C-Suite, VP, and Director. Limits results to 3 per company for credit safety.
-3. **Stage 3: Email Resolution (`src/api/prospeoEnrich.js`):** Sends target LinkedIn URLs to Prospeo `POST /enrich-person` to retrieve and verify emails.
-   > [!NOTE]
-   > Stage 3 is routed directly through Prospeo's Enrich Person API using your `PROSPEO_API_KEY` because Eazyreach's dashboard did not offer any way to obtain an API key (or we were unable to find it whatsoever).
-4. **Stage 4: Personalized Outreach (`src/api/brevo.js`):** Personalizes HTML templates using contact data and delivers them via Brevo SMTP from your custom sender `contact@anugyajain.info`.
+1. **Max Discount Percentage Cap:** Hard limit on discount rates (Default: `20%`). Rejects any higher proposed discounts.
+2. **Batch Spend Cap Limit:** Cumulative budget ceiling across a run (Default: `INR 300`). Rejects further discounts if cumulative spend is exceeded.
+3. **Outreach Frequency Cap:** Ensures no customer is contacted more than once every `N` days (Default: `7 days`) by auditing the persistent log records.
+4. **Safety Checkpoint Prompt (`--safety`):** Opt-in CLI confirm gate. Displays all approved actions in a preview table and waits for interactive confirmation before executing.
+5. **Robust Error Handling:** Catches API timeouts or SMTP connection drops (e.g., Sarah D'Souza's simulated delivery failure), logging them as `FAILED` in the audit log while allowing the rest of the batch to run smoothly.
 
 ---
 
 ## 🛠️ Technology Stack
 
-* **Runtime:** Node.js (CommonJS modules for maximum compatibility).
-* **API Requests:** `axios` for standard HTTP clients.
-* **CLI Parser:** `commander` to handle options and arguments.
-* **Interactive Prompts:** `inquirer` for the safety checkpoint.
-* **Styling:** `picocolors` for terminal theme coloring.
-* **Environment Configuration:** `dotenv` to load keys securely.
+* **Runtime:** Node.js (CommonJS modules for broad compatibility).
+* **Payment API:** Razorpay Node API (Basic Auth).
+* **Outreach API:** Brevo SMTP API.
+* **CLI Engine:** `commander` for command options, `inquirer` for safety confirmation.
+* **Theme Styling:** `picocolors` for terminal markup.
 
 ---
 
@@ -95,87 +75,68 @@ graph LR
 Ensure you have **Node.js** (v16+) installed.
 
 ### 2. Install Dependencies
-Clone/unzip the project folder, navigate to it, and install:
 ```bash
 npm install
 ```
 
 ### 3. Configure Environment Variables
-Create a `.env` file in the root directory (based on `.env.example`):
+Create a `.env` file in the root directory (refer to `.env.example`):
 ```env
-# Sourcing (Apollo.io API)
-APOLLO_API_KEY=your_apollo_api_key_here
-
-# Decision Makers (Prospeo API)
-PROSPEO_API_KEY=your_prospeo_api_key_here
-
-# Email Resolution (Stage 3 uses Prospeo Enrich Person API)
-# We are using Prospeo API key only because there was no option to get an Eazyreach API key from the dashboard or if there was we were unable to find it whatsoever.
-# Stage 3 is fully integrated with Prospeo's /enrich-person API using PROSPEO_API_KEY.
+# Razorpay Test Keys
+RAZORPAY_KEY_ID=rzp_test_your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
 
 # Outreach (Brevo API)
-BREVO_API_KEY=your_brevo_api_key_here
-SENDER_EMAIL=your_verified_sender_email_here
-SENDER_NAME="Your Sender Name"
+BREVO_API_KEY=xkeysib-your_brevo_api_key
+SENDER_EMAIL=contact@yourmerchant.com
+SENDER_NAME="Your Merchant Store"
 ```
+*(If Razorpay/Brevo API keys are missing, the agent runs automatically in **Simulation/Mock mode**, executing the full pipeline using synthetic data).*
 
 ---
 
-## 🏃 Execution
+## 🏃 CLI Commands & Usage
 
-To run the pipeline against a seed domain, execute:
 ```bash
-node index.js [seed-domain] [options]
+node index.js [options]
 ```
 
-### CLI Options:
-* `-l, --limit <number>`: Number of lookalike companies to source (default: `3`).
-* `-s, --safety`: Enables the interactive Safety Checkpoint table and Y/N confirmation prompt. **If omitted, the pipeline sends emails immediately.**
-* `-d, --demo`: Demo Mode. Overrides the resolved email targets from Stages 1–3 and targets **`project.samarops@gmail.com`** and **`samar@casmed.in`** only, allowing safe, end-to-end sandbox testing.
-* `-t, --stage <type>`: Execution stage: `exec` (performs stages 1 to 4; default) or `mail` (only initiates the mail section; when combined with `--demo`, it skips stages 1-3 entirely and runs only the mock mail).
-
-
-### Examples:
-* **Demo Sandbox (targets test inboxes with safety checkpoint):**
-  ```bash
-  node index.js stripe.com --demo --safety
-  ```
-* **Full Automated Blast (direct execution without checkpoint):**
-  ```bash
-  node index.js stripe.com
-  ```
-* **Interactive Sourcing Run (source 5 lookalikes with Y/N safeguard):**
-  ```bash
-  node index.js stripe.com -l 5 --safety
-  ```
-* **Mail-Only Mock Run (skips stages 1-3, sends test emails directly):**
-  ```bash
-  node index.js --stage mail --demo --safety
-  ```
+### Options:
+* `-m, --mock`: Runs in Simulation mode with synthetic Razorpay customers (default if keys are absent).
+* `-l, --live`: Tries to connect to live Razorpay Test-mode endpoints using `.env` credentials.
+* `-s, --safety`: Enables the interactive Safety Checkpoint table and Y/N confirm prompt before sending.
+* `-c, --config <path>`: Load a custom JSON configuration file to override default caps (e.g. `--config ./output/custom_config.json`).
+* `-a, --view-audit`: Outputs a beautiful ASCII table of the persistent audit logs to the terminal.
+* `--no-fail`: Disables simulated SMTP timeouts in Simulation mode.
 
 ---
 
-## 🛡️ Resilience & SDE Design Best Practices
+## 🎯 Demo Path Walkthrough
 
-To ensure the CLI is robust enough to run in a production setting:
-1. **Loop Rate-Limiting:** Incorporates strict delays of **`2000ms` (2 seconds)** inside processing loops to respect third-party API rate limits and avoid `429 Too Many Requests` responses.
-2. **Graceful Failures:** Each API call is wrapped in a `try/catch` block. If Prospeo fails to resolve a contact for *one* company or decision maker, the script logs a warning, skips that company/person, and moves to the next without crashing.
-3. **Resilient Fallbacks:** If Apollo lookalike company search returns 0 results (due to narrow keywords), the lookalike client falls back to an industry-representative seed list to ensure the downstream pipeline can still execute.
-4. **Data Sanitization:** Trims and sanitizes domain inputs (removes `https://`, `www.`, etc.) to prevent API matching failures.
+To demo the agent's core capabilities in Simulation Mode, run:
 
----
+### Step 1: Clean Simulation Run
+```bash
+node index.js
+```
+* **Aravind Sharma** (One-Time Buyer) & **Deepika Roy** (Abandoned Checkout) are **APPROVED**. Deepika's Razorpay Recovery Payment Link is generated, and emails are sent.
+* **Vikram Malhotra** (Failed Subscription) is **GATED** because his INR 200 discount would exceed the cumulative spend limit of INR 300 (Aravind's INR 120 + Deepika's INR 150 = INR 270).
+* **Sarah D'Souza** (Subscription Renewal) is **APPROVED** but encounters a simulated SMTP/network delivery failure. The agent captures the exception, logs it as `FAILED` in the audit log, and continues.
 
-## 📂 Git Branching & History
+### Step 2: Safety Checkpoint (Opt-in Gate)
+```bash
+node index.js --safety
+```
+Generates a confirmation prompt before Stage 4. Declining the prompt converts all approved actions to `GATED` and records the halt in the audit trail.
 
-This repository reflects professional software engineering practices, utilizing specific feature branching and merges:
-* `setup/init` - Base dependencies and logging setup.
-* `feature/stage1-lookalikes` - Apollo client integration.
-* `feature/stage2-prospeo` - Prospeo decision-maker search.
-* `feature/stage3-eazyreach` - Email resolver fallback (re-routed to Prospeo's Enrich Person API due to lack of Eazyreach API keys).
-* `feature/stage4-brevo` - Brevo outbound SMTP setup.
-* `feature/cli-orchestrator` - Index script wiring and checkpoint.
-* `hotfix/api-corrections` - Corrected Apollo query headers and Prospeo results mapping.
-* `optimize/credit-management` - Implemented the credit-preservation safety filter.
-* `hotfix/enrich-parsing` - Fixed email resolution key path mapping and status checks.
-* `optimize/rate-limiting-delays` - Switched to 2-second loops to avoid Prospeo 429 limits.
-* `feature/cli-flags` - Added `--safety` and `--demo` CLI arguments.
+### Step 3: Cool-down Frequency Check
+Run `node index.js` immediately after a successful run. The agent detects that customers were contacted recently in the logs and **GATES** all outreach to prevent spam.
+
+### Step 4: Inspect the Audit Log
+Verify decision records by viewing the console table:
+```bash
+node index.js --view-audit
+```
+Or open the generated persistent logs directly:
+* **JSON format:** [output/audit_log.json](file:///d:/anugya_cli_project/output/audit_log.json)
+* **Markdown format:** [output/audit_log.md](file:///d:/anugya_cli_project/output/audit_log.md)
