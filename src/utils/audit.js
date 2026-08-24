@@ -7,24 +7,12 @@ const PROJECT_OUTPUT_DIR = path.resolve(__dirname, '../../output');
 const PROJECT_JSON_LOG = path.join(PROJECT_OUTPUT_DIR, 'audit_log.json');
 const PROJECT_MD_LOG = path.join(PROJECT_OUTPUT_DIR, 'audit_log.md');
 
-// App data brain storage
-const BRAIN_DIR = 'C:\\Users\\anugy\\.gemini\\antigravity\\brain\\c01a8fa8-56c2-4b9e-ae56-132c79a024d4';
-const BRAIN_JSON_LOG = path.join(BRAIN_DIR, 'audit_log.json');
-const BRAIN_MD_LOG = path.join(BRAIN_DIR, 'audit_log.md');
-
 /**
  * Creates directories if they do not exist
  */
 function ensureDirectories() {
   if (!fs.existsSync(PROJECT_OUTPUT_DIR)) {
     fs.mkdirSync(PROJECT_OUTPUT_DIR, { recursive: true });
-  }
-  try {
-    if (!fs.existsSync(BRAIN_DIR)) {
-      fs.mkdirSync(BRAIN_DIR, { recursive: true });
-    }
-  } catch (err) {
-    // Suppress errors writing to IDE app data if permissions differ
   }
 }
 
@@ -49,9 +37,13 @@ function readAuditLogs() {
  * Checks if a customer was contacted within the last frequency limit
  * @param {string} customerId - Razorpay customer ID
  * @param {number} frequencyDays - Frequency cap in days
+ * @param {boolean} [isMock=false] - Whether pipeline is running in simulation/mock mode
  * @returns {boolean} - True if already contacted within cool-down, false otherwise
  */
-function isUnderFrequencyCap(customerId, frequencyDays) {
+function isUnderFrequencyCap(customerId, frequencyDays, isMock = false) {
+  // In simulation/demo mode, do not read pre-existing disk logs so that demo runs behave deterministically
+  if (isMock) return false;
+
   const logs = readAuditLogs();
   const now = Date.now();
   const limitMs = frequencyDays * 86400 * 1000;
@@ -83,19 +75,13 @@ function logAuditRecord(record) {
   
   logs.push(enrichedRecord);
   
-  // 1. Write to JSON logs (Project and Brain)
+  // 1. Write to JSON logs
   const jsonContent = JSON.stringify(logs, null, 2);
   fs.writeFileSync(PROJECT_JSON_LOG, jsonContent, 'utf8');
-  try {
-    fs.writeFileSync(BRAIN_JSON_LOG, jsonContent, 'utf8');
-  } catch (e) {}
 
   // 2. Append/Re-generate Markdown logs
   const mdContent = generateMarkdownLog(logs);
   fs.writeFileSync(PROJECT_MD_LOG, mdContent, 'utf8');
-  try {
-    fs.writeFileSync(BRAIN_MD_LOG, mdContent, 'utf8');
-  } catch (e) {}
 }
 
 /**
@@ -114,9 +100,39 @@ function generateMarkdownLog(logs) {
     const outcomeLabel = log.outcome === 'SUCCESS' ? `🟩 SUCCESS` : log.outcome === 'FAILED' ? `🟥 FAILED` : `⬜ GATED`;
     const customerDesc = `${log.customerName} (${log.customerId})`;
     
-    md += `| ${log.timestamp} | ${customerDesc} | ${log.signalType} | ${statusLabel} | ${log.decisionReasoning} | ${outcomeLabel} | ${log.actionDetails || 'None'} |\n`;
+    // Sanitize pipeline chars and newlines in cell content for valid markdown table syntax
+    const cleanReason = (log.decisionReasoning || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    const cleanDetails = (log.actionDetails || 'None').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    
+    md += `| ${log.timestamp} | ${customerDesc} | ${log.signalType} | ${statusLabel} | ${cleanReason} | ${outcomeLabel} | ${cleanDetails} |\n`;
   }
   return md;
+}
+
+/**
+ * Helper to split text into lines of at most `maxWidth` characters (word-wrapped).
+ */
+function wrapText(str, maxWidth) {
+  if (!str) return [''];
+  const words = String(str).split(' ');
+  const lines = [];
+  let currentLine = '';
+
+  words.forEach(word => {
+    if ((currentLine + (currentLine ? ' ' : '') + word).length <= maxWidth) {
+      currentLine += (currentLine ? ' ' : '') + word;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      let rem = word;
+      while (rem.length > maxWidth) {
+        lines.push(rem.substring(0, maxWidth));
+        rem = rem.substring(maxWidth);
+      }
+      currentLine = rem;
+    }
+  });
+  if (currentLine) lines.push(currentLine);
+  return lines.length > 0 ? lines : [''];
 }
 
 /**
@@ -129,20 +145,21 @@ function printAuditTrailTable(currentRunLogs = null) {
     return;
   }
 
-  // Header
-  console.log('\n' + pc.magenta(pc.bold('========================================= REVIVEPAY AUDIT TRAIL =========================================')));
-  
   const colWidths = {
-    time: 9, // showing only HH:MM:ss
+    time: 8,      // HH:MM:ss
     customer: 18,
-    signal: 20,
-    status: 10,
-    outcome: 9,
-    reason: 45
+    signal: 30,   // Fits "subscriptions nearing renewal" (29 chars) on one line
+    status: 10,   // "APPROVED" / "GATED"
+    outcome: 9,   // "SUCCESS" / "FAILED" / "GATED"
+    reason: 55    // Decision reasoning (wrapped onto multi-line if longer)
   };
 
   const header = `| ${'Time'.padEnd(colWidths.time)} | ${'Customer'.padEnd(colWidths.customer)} | ${'Signal Type'.padEnd(colWidths.signal)} | ${'Decision'.padEnd(colWidths.status)} | ${'Outcome'.padEnd(colWidths.outcome)} | ${'Decision Reasoning'.padEnd(colWidths.reason)} |`;
   const divider = `+${'-'.repeat(colWidths.time + 2)}+${'-'.repeat(colWidths.customer + 2)}+${'-'.repeat(colWidths.signal + 2)}+${'-'.repeat(colWidths.status + 2)}+${'-'.repeat(colWidths.outcome + 2)}+${'-'.repeat(colWidths.reason + 2)}+`;
+
+  console.log('\n' + pc.magenta(pc.bold('='.repeat(header.length))));
+  console.log(pc.magenta(pc.bold('                               REVIVEPAY AUDIT TRAIL')));
+  console.log(pc.magenta(pc.bold('='.repeat(header.length))));
 
   console.log(pc.cyan(divider));
   console.log(pc.cyan(header));
@@ -152,34 +169,46 @@ function printAuditTrailTable(currentRunLogs = null) {
   const displayLogs = logs.slice(-15);
   displayLogs.forEach(log => {
     const timeStr = (log.timestamp || new Date().toISOString()).split('T')[1].substring(0, 8);
-    const time = timeStr.padEnd(colWidths.time);
     
-    const nameStr = log.customerName.substring(0, colWidths.customer);
-    const customer = nameStr.padEnd(colWidths.customer);
+    const timeLines = wrapText(timeStr, colWidths.time);
+    const customerLines = wrapText(log.customerName, colWidths.customer);
+    const signalLines = wrapText(log.signalType, colWidths.signal);
+    const reasonLines = wrapText(log.decisionReasoning, colWidths.reason);
     
-    const sigStr = log.signalType.substring(0, colWidths.signal);
-    const signal = sigStr.padEnd(colWidths.signal);
+    const numLines = Math.max(
+      timeLines.length,
+      customerLines.length,
+      signalLines.length,
+      reasonLines.length
+    );
 
-    let status = '';
-    if (log.decisionStatus === 'APPROVED') {
-      status = pc.green(pc.bold('APPROVED'.padEnd(colWidths.status)));
-    } else {
-      status = pc.yellow(pc.bold('GATED'.padEnd(colWidths.status)));
+    for (let i = 0; i < numLines; i++) {
+      const timeCell = (timeLines[i] || '').padEnd(colWidths.time);
+      const customerCell = (customerLines[i] || '').padEnd(colWidths.customer);
+      const signalCell = (signalLines[i] || '').padEnd(colWidths.signal);
+      const reasonCell = (reasonLines[i] || '').padEnd(colWidths.reason);
+
+      let statusCell = ''.padEnd(colWidths.status);
+      let outcomeCell = ''.padEnd(colWidths.outcome);
+
+      if (i === 0) {
+        if (log.decisionStatus === 'APPROVED') {
+          statusCell = pc.green(pc.bold('APPROVED'.padEnd(colWidths.status)));
+        } else {
+          statusCell = pc.yellow(pc.bold('GATED'.padEnd(colWidths.status)));
+        }
+
+        if (log.outcome === 'SUCCESS') {
+          outcomeCell = pc.green('SUCCESS'.padEnd(colWidths.outcome));
+        } else if (log.outcome === 'FAILED') {
+          outcomeCell = pc.red(pc.bold('FAILED'.padEnd(colWidths.outcome)));
+        } else {
+          outcomeCell = pc.dim('GATED'.padEnd(colWidths.outcome));
+        }
+      }
+
+      console.log(`| ${timeCell} | ${customerCell} | ${signalCell} | ${statusCell} | ${outcomeCell} | ${reasonCell} |`);
     }
-
-    let outcome = '';
-    if (log.outcome === 'SUCCESS') {
-      outcome = pc.green('SUCCESS'.padEnd(colWidths.outcome));
-    } else if (log.outcome === 'FAILED') {
-      outcome = pc.red(pc.bold('FAILED'.padEnd(colWidths.outcome)));
-    } else {
-      outcome = pc.dim('GATED'.padEnd(colWidths.outcome));
-    }
-
-    const reasonStr = log.decisionReasoning.substring(0, colWidths.reason);
-    const reason = reasonStr.padEnd(colWidths.reason);
-
-    console.log(`| ${time} | ${customer} | ${signal} | ${status} | ${outcome} | ${reason} |`);
   });
 
   console.log(pc.cyan(divider));
@@ -193,3 +222,4 @@ module.exports = {
   printAuditTrailTable,
   readAuditLogs
 };
+

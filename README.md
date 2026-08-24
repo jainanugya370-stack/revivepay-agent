@@ -129,8 +129,11 @@ node index.js --safety
 ```
 Generates a confirmation prompt before Stage 4. Declining the prompt converts all approved actions to `GATED` and records the halt in the audit trail.
 
-### Step 3: Cool-down Frequency Check
-Run `node index.js` immediately after a successful run. The agent detects that customers were contacted recently in the logs and **GATES** all outreach to prevent spam.
+### Step 3: Cool-down Frequency Check (Live Mode)
+```bash
+node index.js --live
+```
+In Live Mode (`--live`), running immediately after a previous successful run checks persistent audit logs on disk and **GATES** outreach to customers contacted within the last 7 days cool-down period.
 
 ### Step 4: Inspect the Audit Log
 Verify decision records by viewing the console table:
@@ -138,5 +141,6 @@ Verify decision records by viewing the console table:
 node index.js --view-audit
 ```
 Or open the generated persistent logs directly:
-* **JSON format:** [output/audit_log.json](file:///d:/anugya_cli_project/output/audit_log.json)
-* **Markdown format:** [output/audit_log.md](file:///d:/anugya_cli_project/output/audit_log.md)
+* **JSON format:** `./output/audit_log.json`
+* **Markdown format:** `./output/audit_log.md`
+

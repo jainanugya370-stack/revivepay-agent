@@ -160,7 +160,7 @@ async function runRevivePay(useMock = false, demoFailures = true, safetyPrompt =
     const aov = paidOrders.length > 0 ? (totalSpent / paidOrders.length) : 0;
     
     // Check communication frequency cap in audit log
-    const contactedRecently = audit.isUnderFrequencyCap(cust.id, activeConfig.MAX_OUTREACH_FREQUENCY_DAYS);
+    const contactedRecently = audit.isUnderFrequencyCap(cust.id, activeConfig.MAX_OUTREACH_FREQUENCY_DAYS, useMock);
     
     enrichedOpportunities.push({
       ...opp,
