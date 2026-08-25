@@ -129,13 +129,13 @@ node index.js --safety
 ```
 Generates a confirmation prompt before Stage 4. Declining the prompt converts all approved actions to `GATED` and records the halt in the audit trail.
 
-### Step 3: Cool-down Frequency Check (Live Mode)
+### Step 3: Live Mode Run (Real Razorpay Test API & Brevo SMTP)
 ```bash
 node index.js --live
 ```
-In Live Mode (`--live`), running immediately after a previous successful run checks persistent audit logs on disk and **GATES** outreach to customers contacted within the last 7 days cool-down period.
+Plugs directly into your real Razorpay Test API endpoints (`/v1/customers`, `/v1/orders`, `/v1/subscriptions`) using `.env` credentials. In Live Mode, the agent checks persistent audit logs (`./output/audit_log.json`) across runs to enforce the 7-day contact cool-down frequency cap and prevent spamming active customers.
 
-### Step 4: Inspect the Audit Log
+### Step 4: Inspect the Persistent Audit Log
 Verify decision records by viewing the console table:
 ```bash
 node index.js --view-audit
