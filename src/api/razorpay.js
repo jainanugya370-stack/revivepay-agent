@@ -210,6 +210,11 @@ async function fetchSubscriptions(useMock = false) {
     const response = await client.get('/subscriptions');
     return response.data.items || [];
   } catch (error) {
+    const status = error.response?.status;
+    if (status === 401 || status === 404) {
+      logger.warn(`Razorpay Subscriptions API notice: Subscriptions module is not activated on this Razorpay account. Proceeding with Customers & Orders data.`);
+      return [];
+    }
     logger.error(`Razorpay API Error fetching subscriptions: ${error.message}`);
     throw error;
   }
